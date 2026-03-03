@@ -49,7 +49,7 @@ COL_MASTER_SETUP = 13  # M열 = SET UP (레포트 V10)
 # 마스터 New Alarm 및 사용Part 이력
 COL_ALARM_SN = 12          # L열 = S/N
 COL_ALARM_WORK_DATE = 16   # P열 = 작업일자 (이전 점검일 V11용)
-COL_ALARM_SETUP = 38       # AL열 = SET UP
+COL_ALARM_SETUP = 15       # O열 = TURN ON (SET UP 2순위)
 
 # 설비 Master Sheet: 머릿말 6~7행(병합), 데이터 8행부터
 MASTER_DATA_START_ROW = 8

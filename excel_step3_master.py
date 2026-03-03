@@ -14,7 +14,7 @@ Step 3: 레포트 + 스케줄 → 마스터(New Alarm 및 사용Part 이력) 기
 
 import sys
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import xlwings as xw
 
@@ -143,7 +143,7 @@ def get_visit_date_and_yyyymmdd(val_l, val_m, val_n):
         elif isinstance(val, (int, float)):
             # Excel 날짜 직렬값 가정
             try:
-                d = date(1899, 12, 30) + datetime.timedelta(days=int(val))  # type: ignore[attr-defined]
+                d = date(1899, 12, 30) + timedelta(days=int(val))
             except Exception:
                 continue
         else:
@@ -359,7 +359,10 @@ def main():
                         kk_turn_on = rs.range("V10").value    # TURN ON
                         kk_date = rs.range("V8").value        # 작업일자
                         kk_prev = rs.range("V11").value       # 이전 방문일
-                        kk_elapsed = rs.range("V12").value    # 경과일
+                        try:
+                            kk_elapsed = rs.range("V12").api.Text  # 경과일 (화면 표시값)
+                        except Exception:
+                            kk_elapsed = rs.range("V12").value
                         kk_time = rs.range("AA9").value       # 작업시간
                         kk_problem = rs.range("B17").value    # 문제/현상
                         kk_cause = rs.range("B19").value      # 원인

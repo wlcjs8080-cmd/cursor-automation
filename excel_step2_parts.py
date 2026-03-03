@@ -201,14 +201,7 @@ def run_step2():
         app_master.display_alerts = False
         master_book = app_master.books.open(str(master_path))
 
-        # 6) 'New Alarm 및 사용Part 이력' 시트 필터 자동 해제
         alarm_sheet = _get_sheet_by_name(master_book, MASTER_SHEET_ALARM)
-        if alarm_sheet is not None:
-            try:
-                if getattr(alarm_sheet.api, "AutoFilterMode", False):
-                    alarm_sheet.api.AutoFilterMode = False
-            except Exception:
-                pass
 
         # ★ 전체 데이터를 한 번에 읽기 (속도 개선 핵심)
         if alarm_sheet is not None:

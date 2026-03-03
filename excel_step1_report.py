@@ -463,19 +463,8 @@ def main():
         # 마스터 열기
         master_wb = app.books.open(str(master_path))
 
-        # 마스터 두 시트의 AutoFilter가 켜져 있으면 자동 해제
         master_design_sheet = _get_sheet_by_name(master_wb, MASTER_SHEET_NAME)
         master_alarm_sheet = _get_sheet_by_name(master_wb, MASTER_SHEET_ALARM)
-        try:
-            if master_design_sheet is not None and getattr(master_design_sheet.api, "AutoFilterMode", False):
-                master_design_sheet.api.AutoFilterMode = False
-        except Exception:
-            pass
-        try:
-            if master_alarm_sheet is not None and getattr(master_alarm_sheet.api, "AutoFilterMode", False):
-                master_alarm_sheet.api.AutoFilterMode = False
-        except Exception:
-            pass
 
         # ★ 마스터 전체 데이터를 한 번에 읽기 (속도 개선 핵심)
         master_data = _read_all_data(master_design_sheet) if master_design_sheet is not None else []

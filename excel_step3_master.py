@@ -263,13 +263,6 @@ def main():
             schedule_wb.close()
             return
 
-        # 필터 자동 해제
-        try:
-            if getattr(master_sheet.api, "AutoFilterMode", False):
-                master_sheet.api.AutoFilterMode = False
-        except Exception:
-            pass
-
         # 새 행 시작 위치 계산
         next_row = find_master_next_row(master_sheet)
 
@@ -359,10 +352,6 @@ def main():
                         kk_turn_on = rs.range("V10").value    # TURN ON
                         kk_date = rs.range("V8").value        # 작업일자
                         kk_prev = rs.range("V11").value       # 이전 방문일
-                        try:
-                            kk_elapsed = rs.range("V12").api.Text  # 경과일 (화면 표시값)
-                        except Exception:
-                            kk_elapsed = rs.range("V12").value
                         kk_time = rs.range("AA9").value       # 작업시간
                         kk_problem = rs.range("B17").value    # 문제/현상
                         kk_cause = rs.range("B19").value      # 원인
@@ -404,7 +393,6 @@ def main():
                             master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
                             master_sheet.range((row, 25)).value = kk_cause    # Y 원인
                             master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
-                            master_sheet.range((row, 41)).value = kk_elapsed  # AO 경과일
                             next_row += 1
 
                         # "파트" 행들 (유상/무상 공통, 품번 수만큼)
@@ -430,7 +418,6 @@ def main():
                             master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
                             master_sheet.range((row, 25)).value = kk_cause    # Y 원인
                             master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
-                            master_sheet.range((row, 41)).value = kk_elapsed  # AO 경과일
                             # 파트 정보 (AB, AC, AG, AK)
                             master_sheet.range((row, 28)).value = part_name   # AB 파트명
                             master_sheet.range((row, 29)).value = part_no     # AC 품번

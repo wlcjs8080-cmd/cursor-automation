@@ -469,6 +469,7 @@ def main():
                             master_sheet.range((row, 35)).value = "-"         # AI
                             master_sheet.range((row, 36)).value = "-"         # AJ
                             master_sheet.range((row, 37)).value = spec_val    # AK 규격
+                            master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
                             next_row += 1
 
                         for (pn, pno, ud, sp, qt, ct) in left_parts:

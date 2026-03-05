@@ -418,9 +418,15 @@ def main():
                             master_sheet.range((row, 25)).value = kk_cause    # Y 원인
                             master_sheet.range((row, 27)).value = "-"         # AA 구분
                             master_sheet.range((row, 28)).value = "인건비"   # AB 인건비
+                            master_sheet.range((row, 29)).value = "-"         # AC
+                            master_sheet.range((row, 30)).value = "-"         # AD
                             master_sheet.range((row, 31)).value = kk_work_qty  # AE 수량
                             master_sheet.range((row, 32)).value = "-"          # AF WARRANTY
+                            master_sheet.range((row, 33)).value = "-"         # AG
                             master_sheet.range((row, 34)).value = kk_charge    # AH 유/무상
+                            master_sheet.range((row, 35)).value = "-"         # AI
+                            master_sheet.range((row, 36)).value = "-"         # AJ
+                            master_sheet.range((row, 37)).value = "-"         # AK
                             master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
                             next_row += 1
 
@@ -455,10 +461,13 @@ def main():
                             master_sheet.range((row, 27)).value = "파트"      # AA 구분
                             master_sheet.range((row, 28)).value = part_name   # AB 파트명
                             master_sheet.range((row, 29)).value = part_no     # AC 품번
+                            master_sheet.range((row, 30)).value = "-"         # AD
                             master_sheet.range((row, 31)).value = qty         # AE 수량
                             master_sheet.range((row, 32)).value = "1년"       # AF WARRANTY
-                            master_sheet.range((row, 34)).value = charge_type # AH 유/무상
                             master_sheet.range((row, 33)).value = used_days   # AG 사용일
+                            master_sheet.range((row, 34)).value = charge_type # AH 유/무상
+                            master_sheet.range((row, 35)).value = "-"         # AI
+                            master_sheet.range((row, 36)).value = "-"         # AJ
                             master_sheet.range((row, 37)).value = spec_val    # AK 규격
                             next_row += 1
 

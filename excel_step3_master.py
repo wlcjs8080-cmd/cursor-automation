@@ -266,6 +266,16 @@ def main():
         # 새 행 시작 위치 계산
         next_row = find_master_next_row(master_sheet)
 
+        # 기존 마지막 데이터 행의 일부 열 값 복사용 (C, E, F, K)
+        base_row = next_row - 1
+        if base_row >= MASTER_DATA_START_ROW:
+            base_c = master_sheet.range((base_row, 3)).value  # C열
+            base_e = master_sheet.range((base_row, 5)).value  # E열
+            base_f = master_sheet.range((base_row, 6)).value  # F열
+            base_k = master_sheet.range((base_row, 11)).value  # K열
+        else:
+            base_c = base_e = base_f = base_k = None
+
         success_count = 0
         skip_count = 0
 
@@ -352,6 +362,8 @@ def main():
                         kk_turn_on = rs.range("V10").value    # TURN ON
                         kk_date = rs.range("V8").value        # 작업일자
                         kk_prev = rs.range("V11").value       # 이전 방문일
+                        kk_start_time = rs.range("V9").value  # 시작시간
+                        kk_end_time = rs.range("Y9").value    # 종료시간
                         kk_time = rs.range("AA9").value       # 작업시간
                         kk_problem = rs.range("B17").value    # 문제/현상
                         kk_cause = rs.range("B19").value      # 원인
@@ -377,22 +389,29 @@ def main():
                             used_days = rs.range((r, 25)).value  # Y열
                             right_parts.append((part_name, part_no, used_days, spec))
 
-                        # "작업" 행 (유상일 때만)
-                        if charge_str == "유상":
+                        # "작업" 행 (유상/무상 공통)
+                        if charge_str in ("유상", "무상"):
                             row = next_row
                             master_sheet.range((row, 2)).value = "작업"  # B
+                            master_sheet.range((row, 3)).value = base_c  # C
                             master_sheet.range((row, 4)).value = kk_customer  # D 고객사
+                            master_sheet.range((row, 5)).value = base_e  # E
+                            master_sheet.range((row, 6)).value = base_f  # F
                             master_sheet.range((row, 7)).value = line         # G 라인
                             master_sheet.range((row, 10)).value = unit        # J 설비호기
+                            master_sheet.range((row, 11)).value = base_k      # K
                             master_sheet.range((row, 12)).value = kk_sn       # L S/N
                             master_sheet.range((row, 13)).value = kk_model    # M MODEL
                             master_sheet.range((row, 15)).value = kk_turn_on  # O TURN ON
                             master_sheet.range((row, 16)).value = kk_date     # P 작업일자
+                            master_sheet.range((row, 17)).value = kk_start_time  # Q 시작시간
+                            master_sheet.range((row, 18)).value = kk_end_time    # R 종료시간
                             master_sheet.range((row, 19)).value = kk_time     # S 작업시간 (기존값 무조건 덮어쓰기)
                             master_sheet.range((row, 20)).value = staff       # T 작업인원
                             master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
                             master_sheet.range((row, 25)).value = kk_cause    # Y 원인
                             master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
+                            master_sheet.range((row, 28)).value = "인건비"   # AB 인건비
                             next_row += 1
 
                         # "파트" 행들 (유상/무상 공통, 품번 수만큼)
@@ -406,13 +425,19 @@ def main():
                             row = next_row
                             # B~AO까지는 "작업"과 동일한 KK 데이터 기반
                             master_sheet.range((row, 2)).value = "파트"       # B 구분
+                            master_sheet.range((row, 3)).value = base_c       # C
                             master_sheet.range((row, 4)).value = kk_customer  # D 고객사
+                            master_sheet.range((row, 5)).value = base_e       # E
+                            master_sheet.range((row, 6)).value = base_f       # F
                             master_sheet.range((row, 7)).value = line         # G 라인
                             master_sheet.range((row, 10)).value = unit        # J 설비호기
+                            master_sheet.range((row, 11)).value = base_k      # K
                             master_sheet.range((row, 12)).value = kk_sn       # L S/N
                             master_sheet.range((row, 13)).value = kk_model    # M MODEL
                             master_sheet.range((row, 15)).value = kk_turn_on  # O TURN ON
                             master_sheet.range((row, 16)).value = kk_date     # P 작업일자
+                            master_sheet.range((row, 17)).value = kk_start_time  # Q 시작시간
+                            master_sheet.range((row, 18)).value = kk_end_time    # R 종료시간
                             master_sheet.range((row, 19)).value = kk_time     # S 작업시간
                             master_sheet.range((row, 20)).value = staff       # T 작업인원
                             master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)

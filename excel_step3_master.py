@@ -365,6 +365,8 @@ def main():
                         kk_start_time = rs.range("V9").value  # 시작시간
                         kk_end_time = rs.range("Y9").value    # 종료시간
                         kk_time = rs.range("AA9").value       # 작업시간
+                        kk_work_qty = rs.range("W63").value   # 작업 수량 (AE열)
+                        kk_charge = rs.range("Z63").value     # 유/무상 (AH열)
                         kk_problem = rs.range("B17").value    # 문제/현상
                         kk_cause = rs.range("B19").value      # 원인
 
@@ -374,20 +376,24 @@ def main():
                             part_no = rs.range((r, 9)).value  # I열
                             if part_no is None or str(part_no).strip() == "":
                                 continue
-                            part_name = rs.range((r, 2)).value   # B열
-                            spec = rs.range((r, 6)).value        # F열
-                            used_days = rs.range((r, 12)).value  # L열
-                            left_parts.append((part_name, part_no, used_days, spec))
+                            part_name = rs.range((r, 2)).value     # B열
+                            spec = rs.range((r, 6)).value          # F열
+                            used_days = rs.range((r, 12)).value    # L열
+                            qty = rs.range((r, 13)).value          # M열 수량
+                            charge_type = rs.range((r, 14)).value  # N열 유/무상
+                            left_parts.append((part_name, part_no, used_days, spec, qty, charge_type))
 
                         right_parts = []
                         for r in range(57, 62):
                             part_no = rs.range((r, 22)).value  # V열
                             if part_no is None or str(part_no).strip() == "":
                                 continue
-                            part_name = rs.range((r, 15)).value  # O열
-                            spec = rs.range((r, 19)).value       # S열
-                            used_days = rs.range((r, 25)).value  # Y열
-                            right_parts.append((part_name, part_no, used_days, spec))
+                            part_name = rs.range((r, 15)).value     # O열
+                            spec = rs.range((r, 19)).value          # S열
+                            used_days = rs.range((r, 25)).value     # Y열
+                            qty = rs.range((r, 26)).value           # Z열 수량
+                            charge_type = rs.range((r, 27)).value   # AA열 유/무상
+                            right_parts.append((part_name, part_no, used_days, spec, qty, charge_type))
 
                         # "작업" 행 (유상/무상 공통)
                         if charge_str in ("유상", "무상"):
@@ -410,12 +416,16 @@ def main():
                             master_sheet.range((row, 20)).value = staff       # T 작업인원
                             master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
                             master_sheet.range((row, 25)).value = kk_cause    # Y 원인
-                            master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
+                            master_sheet.range((row, 27)).value = "-"         # AA 구분
                             master_sheet.range((row, 28)).value = "인건비"   # AB 인건비
+                            master_sheet.range((row, 31)).value = kk_work_qty  # AE 수량
+                            master_sheet.range((row, 32)).value = "-"          # AF WARRANTY
+                            master_sheet.range((row, 34)).value = kk_charge    # AH 유/무상
+                            master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
                             next_row += 1
 
                         # "파트" 행들 (유상/무상 공통, 품번 수만큼)
-                        def write_part_row(part_name, part_no, used_days, spec_val):
+                        def write_part_row(part_name, part_no, used_days, spec_val, qty, charge_type):
                             nonlocal next_row
                             # 레포트에서 "교체이력 없음"으로 표시된 품번은 마스터에 기록하지 않음
                             if isinstance(part_name, str) and part_name.strip() == "교체이력 없음":
@@ -442,18 +452,20 @@ def main():
                             master_sheet.range((row, 20)).value = staff       # T 작업인원
                             master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
                             master_sheet.range((row, 25)).value = kk_cause    # Y 원인
-                            master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
-                            # 파트 정보 (AB, AC, AG, AK)
+                            master_sheet.range((row, 27)).value = "파트"      # AA 구분
                             master_sheet.range((row, 28)).value = part_name   # AB 파트명
                             master_sheet.range((row, 29)).value = part_no     # AC 품번
+                            master_sheet.range((row, 31)).value = qty         # AE 수량
+                            master_sheet.range((row, 32)).value = "1년"       # AF WARRANTY
+                            master_sheet.range((row, 34)).value = charge_type # AH 유/무상
                             master_sheet.range((row, 33)).value = used_days   # AG 사용일
                             master_sheet.range((row, 37)).value = spec_val    # AK 규격
                             next_row += 1
 
-                        for (pn, pno, ud, sp) in left_parts:
-                            write_part_row(pn, pno, ud, sp)
-                        for (pn, pno, ud, sp) in right_parts:
-                            write_part_row(pn, pno, ud, sp)
+                        for (pn, pno, ud, sp, qt, ct) in left_parts:
+                            write_part_row(pn, pno, ud, sp, qt, ct)
+                        for (pn, pno, ud, sp, qt, ct) in right_parts:
+                            write_part_row(pn, pno, ud, sp, qt, ct)
 
                         success_count += 1
                         print(f"행 {row_num}: 마스터 기입 완료 (작업/파트)")

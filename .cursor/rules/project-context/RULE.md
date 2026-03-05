@@ -263,6 +263,7 @@ alwaysApply: true
 - [ ] Step 3 추가 자동화 2단계 (DK님 추가 지시 시)
 - [ ] SQLite DB 마이그레이션 구현 (DB_MIGRATION_PLAN.md 순서대로)
 - [ ] .exe 앱 변환
+ - [ ] 모바일 입력 방식 확정 (현장 인터넷 확인 후 MOBILE_INPUT_DECISION.md 업데이트)
 
 
 # 영구 참고사항

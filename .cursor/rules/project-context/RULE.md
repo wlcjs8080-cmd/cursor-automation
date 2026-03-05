@@ -243,27 +243,41 @@ alwaysApply: true
 - AQ열은 코드에서 기록하지 않음
 - 마스터 시트 전체 열 구조(A~AQ 43열) project-context RULE.md에 추가 완료
 
+## 9차 세션 (2026-03-05)
+- Step 1~3 통합 테스트 완료 확인 (이전 세션에서 수행)
+- DB 마이그레이션 코드 4단계 전부 완료:
+  - 1단계: db_init.py 신규 생성 (마스터 엑셀 → master.db, 스케줄 엑셀 → schedule.db 변환)
+  - 2단계: excel_step1_report.py DB 연동 수정 (master.db/schedule.db에서 읽기, 처리중/완료 상태관리, 에러 시 롤백)
+  - 3단계: excel_step2_parts.py DB 연동 수정 (master.db에서 읽기), excel_step3_master.py DB 연동 수정 (schedule.db 읽기, master.db INSERT, 트랜잭션)
+  - 4단계: db_export.py 신규 생성 (master.db → 마스터 엑셀, schedule.db → 스케줄 엑셀 AC열 완료 반영)
+- 구글 폼 → 구글 시트 → schedule.db 연동 구조 확정 (스케줄 엑셀은 보관용으로만 사용)
+- .exe GUI 앱 버튼 구성 확정: 스케줄 가져오기, Step 1, Step 2, Step 3, 퇴근 저장(내보내기)
+
 
 # 현재 상태
 # (이 섹션만 최신으로 덮어쓰기 가능하다)
 
 - 마지막 작업일: 2026-03-05
 - Step 0: 완료 (실행 금지)
-- Step 1: 완료
-- Step 2: 완료
-- Step 3: 추가 자동화 완료 (유/무상 구분 없이 작업행 생성, AA/AB/AC/AD/AE/AF/AG/AH/AI/AJ/AK/AM 열 자동 기록, Q/R 시작종료시간 추가)
-- SQLite DB 마이그레이션: 계획 확정 (DB_MIGRATION_PLAN.md 참조), 구현 미착수
+- Step 1: DB 연동 수정 완료 (테스트 미완)
+- Step 2: DB 연동 수정 완료 (테스트 미완)
+- Step 3: DB 연동 수정 완료 (테스트 미완)
+- db_init.py: 생성 완료 (테스트 미완)
+- db_export.py: 생성 완료 (테스트 미완)
+- SQLite DB 마이그레이션: 코드 작업 완료, 시뮬레이션 테스트 미완
 - .exe 앱 변환: 미착수
+- 구글 폼 연동: 구조 확정, 코드 미착수
 
 
 # 다음 작업 목록 (우선순위 순)
 # (완료 시 ✅ 표시만 하고 삭제하지 마라)
 
-- [ ] Step 1~3 통합 테스트 완료
-- [ ] Step 3 추가 자동화 2단계 (DK님 추가 지시 시)
-- [ ] SQLite DB 마이그레이션 구현 (DB_MIGRATION_PLAN.md 순서대로)
-- [ ] .exe 앱 변환
- - [ ] 모바일 입력 방식 확정 (현장 인터넷 확인 후 MOBILE_INPUT_DECISION.md 업데이트)
+- [x] Step 1~3 통합 테스트 완료
+- [ ] DB 시뮬레이션 테스트 (db_init → Step 1~3 순차 → 동시 접근 → db_export)
+- [ ] 구글 폼 → 구글 시트 → schedule.db 가져오기 코드 작성
+- [ ] .exe GUI 앱 변환 (스케줄 가져오기 / Step 1 / Step 2 / Step 3 / 퇴근 저장 버튼)
+- [ ] 실제 다중 PC 테스트
+- [ ] 모바일 입력 방식 확정 (현장 인터넷 확인 후 MOBILE_INPUT_DECISION.md 업데이트)
 
 
 # 영구 참고사항

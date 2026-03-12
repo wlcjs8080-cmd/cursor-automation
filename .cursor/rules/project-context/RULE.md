@@ -280,6 +280,22 @@ alwaysApply: true
 - [ ] 모바일 입력 방식 확정 (현장 인터넷 확인 후 MOBILE_INPUT_DECISION.md 업데이트)
 
 
+## 10차 세션 (2026-03-12)
+- DB 시뮬레이션 테스트 진행
+- db_init 성공: master.db 7510행, schedule.db 62행 생성
+- Step 1 DB 연동 테스트 성공: 레포트 1건 생성, 60건 건너뜀 (데이터 불완전)
+- Step 2 DB 연동 테스트 성공: master.db에서 이전 교체일 조회, K57 등 정상 채움
+- Step 3 DB 연동 수정: schedule.db 조회로 변경 (기존 엑셀 AC열 참조 제거)
+- Step 3 들여쓰기 버그 수정: right_parts 루프 안에 마스터 기입 코드가 잘못 포함 → 루프 밖으로 이동
+- Step 3 마스터 엑셀 직접 쓰기 → master.db INSERT로 전환 완료
+- Step 3 INSERT 플레이스홀더 43개 오류 반복 수정 (work_values, part_values 모두)
+- Step 3 최종 성공: master.db 7512행 (작업 1행 + 파트 1행 추가 확인)
+- db_export 수정: 전체 덮어쓰기 → 새 행만 추가 방식으로 변경
+- db_export 마스터 반영 미완: 새 행 감지 로직 확인 필요 (다음 세션에서 해결)
+- db_export 스케줄 반영 미완: schedule.db 완료 행 매칭 실패 0건 (다음 세션에서 해결)
+- 전체 흐름 확인: db_init → Step1 → Step2 → Step3 순차 성공, db_export만 미완
+
+
 # 영구 참고사항
 
 ## AC열 표시 규칙

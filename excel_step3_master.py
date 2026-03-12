@@ -15,6 +15,7 @@ Step 3: 레포트 + 스케줄 → 마스터(New Alarm 및 사용Part 이력) 기
 import sys
 from pathlib import Path
 from datetime import datetime, date, timedelta
+import sqlite3
 
 import xlwings as xw
 
@@ -25,6 +26,9 @@ BASE_PATH = Path(r"C:\정동교\문서 자동화 TEST\커서 바이브코딩 자
 SCHEDULE_FOLDER = BASE_PATH / "스케쥴 시트"
 MASTER_FOLDER = BASE_PATH / "마스터 시트"
 CUSTOMER_FOLDER = BASE_PATH / "고객사 폴더"
+DB_FOLDER = BASE_PATH / "db"
+SCHEDULE_DB_PATH = DB_FOLDER / "schedule.db"
+MASTER_DB_PATH = DB_FOLDER / "master.db"
 
 SCHEDULE_SHEET_NAME = "Sheet1"
 REPORT_SHEET_NAME = "PM REPORT (새양식)"
@@ -195,301 +199,329 @@ def is_master_in_use_by_temp_file():
 
 def main():
     # 폴더 존재 확인
-    if not SCHEDULE_FOLDER.is_dir():
-        print(f"오류: 스케줄 폴더를 찾을 수 없습니다. {SCHEDULE_FOLDER}")
-        return
     if not MASTER_FOLDER.is_dir():
         print(f"오류: 마스터 폴더를 찾을 수 없습니다. {MASTER_FOLDER}")
         return
 
-    schedule_files = [p for p in list(SCHEDULE_FOLDER.glob("*.xlsx")) + list(SCHEDULE_FOLDER.glob("*.xlsm"))
-                      if "_backup_" not in p.name and not p.name.startswith("~$")]
-    if not schedule_files:
-        print(f"처리할 스케줄 파일이 없습니다. ({SCHEDULE_FOLDER})")
-        return
-
+    # (선택) 마스터 엑셀 백업은 유지하되, 엑셀 파일은 더 이상 열지 않는다.
     master_files = [p for p in list(MASTER_FOLDER.glob("*.xlsx")) + list(MASTER_FOLDER.glob("*.xlsm"))
                     if "_backup_" not in p.name and not p.name.startswith("~$")]
-    if not master_files:
-        print(f"마스터 파일이 없습니다. ({MASTER_FOLDER})")
-        return
-
-    schedule_path = schedule_files[0]
-    master_path = master_files[0]
-
-    # 마스터 시트 사용 중(~$ 임시 파일) 체크
-    if is_master_in_use_by_temp_file():
-        print("마스터 시트가 사용 중입니다. 닫히면 다시 실행하세요.")
-        return
-
-    # 마스터 파일 백업
-    try:
-        backup = backup_file(master_path)
-        print(f"마스터 백업 완료: {backup.name}")
-    except Exception as e:
-        print(f"마스터 백업 실패: {e}")
-        sys.exit(1)
+    if master_files:
+        master_path = master_files[0]
+        try:
+            backup = backup_file(master_path)
+            print(f"마스터 백업 완료: {backup.name}")
+        except Exception as e:
+            print(f"마스터 백업 실패: {e}")
 
     app = None
     try:
         app = xw.App(visible=False)
         app.display_alerts = False
 
-        # 스케줄 열기 (읽기 전용 용도)
-        schedule_wb = app.books.open(str(schedule_path))
-        if SCHEDULE_SHEET_NAME not in [s.name for s in schedule_wb.sheets]:
-            print(f"오류: 스케줄 시트에 '{SCHEDULE_SHEET_NAME}'이(가) 없습니다.")
-            schedule_wb.close()
-            return
-        schedule_sheet = schedule_wb.sheets[SCHEDULE_SHEET_NAME]
-
-        # 마스터 열기 (쓰기)
-        master_wb = app.books.open(str(master_path))
-
-        # 읽기 전용 여부 체크
-        try:
-            if bool(getattr(master_wb.api, "ReadOnly", False)):
-                print("마스터 시트가 읽기 전용으로 열려 있습니다. 닫히면 다시 실행하세요.")
-                master_wb.close()
-                schedule_wb.close()
-                return
-        except Exception:
-            pass
-
-        master_sheet = _get_sheet_by_name(master_wb, MASTER_SHEET_ALARM)
-        if master_sheet is None:
-            print(f"오류: 마스터 파일에 시트 '{MASTER_SHEET_ALARM}'이(가) 없습니다.")
-            master_wb.close()
-            schedule_wb.close()
-            return
-
-        # 새 행 시작 위치 계산
-        next_row = find_master_next_row(master_sheet)
-
-        # 기존 마지막 데이터 행의 일부 열 값 복사용 (C, E, F, K)
-        base_row = next_row - 1
-        if base_row >= MASTER_DATA_START_ROW:
-            base_c = master_sheet.range((base_row, 3)).value  # C열
-            base_e = master_sheet.range((base_row, 5)).value  # E열
-            base_f = master_sheet.range((base_row, 6)).value  # F열
-            base_k = master_sheet.range((base_row, 11)).value  # K열
-        else:
-            base_c = base_e = base_f = base_k = None
+        # 더 이상 마스터 엑셀을 열지 않는다. base_* 값은 None으로 사용.
+        base_c = base_e = base_f = base_k = None
 
         success_count = 0
         skip_count = 0
 
-        # 3월(HEADER_ROWS >= 183) 블록부터, AC="완료" 행만 처리
-        for header_row in [r for r in HEADER_ROWS if r >= 183]:
-            start_row = header_row + 1
-            end_row = header_row + DATA_ROWS_PER_BLOCK
-            for row_num in range(start_row, end_row + 1):
-                try:
-                    val_ac = schedule_sheet.range((row_num, COL_PROCESS_DONE)).value
-                    if val_ac is None or str(val_ac).strip() != "완료":
-                        continue
+        # DB 존재 확인
+        if not DB_FOLDER.is_dir() or not SCHEDULE_DB_PATH.is_file():
+            print(f"오류: schedule.db를 찾을 수 없습니다. ({SCHEDULE_DB_PATH})")
+            print("-" * 50)
+            print(f"총 {success_count}건 마스터 기입, {skip_count}건 건너뜀")
+            return
+        if not MASTER_DB_PATH.is_file():
+            print(f"오류: master.db를 찾을 수 없습니다. ({MASTER_DB_PATH})")
+            print("-" * 50)
+            print(f"총 {success_count}건 마스터 기입, {skip_count}건 건너뜀")
+            return
 
-                    customer = schedule_sheet.range((row_num, COL_CUSTOMER)).value
-                    model = schedule_sheet.range((row_num, COL_MODEL)).value
-                    serial = schedule_sheet.range((row_num, COL_SERIAL)).value
-                    work = schedule_sheet.range((row_num, COL_WORK)).value
-                    staff = schedule_sheet.range((row_num, COL_STAFF)).value
-                    line = schedule_sheet.range((row_num, COL_LINE)).value
-                    unit = schedule_sheet.range((row_num, COL_UNIT)).value
-                    val_l = schedule_sheet.range((row_num, COL_VISIT_1)).value
-                    val_m = schedule_sheet.range((row_num, COL_VISIT_2)).value
-                    val_n = schedule_sheet.range((row_num, COL_VISIT_3)).value
+        # schedule.db에서 status='완료' 행 조회
+        conn = sqlite3.connect(str(SCHEDULE_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                rowid AS row_id,
+                receipt_date,
+                visit_plan,
+                visit_1,
+                visit_2,
+                visit_3,
+                reason,
+                customer,
+                manager,
+                receiver,
+                mat_worker,
+                work,
+                charge_type,
+                people,
+                process,
+                line,
+                model,
+                unit,
+                sn,
+                visit_done,
+                process_done,
+                status
+            FROM schedule
+            WHERE status = '완료'
+            """
+        )
+        rows = cur.fetchall()
+        print(f"조회된 행 수: {len(rows)}")
 
-                    visit_val, yyyymmdd = get_visit_date_and_yyyymmdd(val_l, val_m, val_n)
-                    if visit_val is None or yyyymmdd is None:
-                        print(f"행 {row_num}: 방문일정 없음 → 건너뜀")
-                        skip_count += 1
-                        continue
+        if not rows:
+            print("status='완료' 인 스케줄 행이 없습니다.")
+            conn.close()
+            print("-" * 50)
+            print(f"총 {success_count}건 마스터 기입, {skip_count}건 건너뜀")
+            return
 
-                    if not customer or not str(customer).strip():
-                        print(f"행 {row_num}: 고객사명 누락 → 건너뜀")
-                        skip_count += 1
-                        continue
-                    if not model or not str(model).strip():
-                        print(f"행 {row_num}: MODEL(Y열) 누락 → 건너뜀")
-                        skip_count += 1
-                        continue
-                    if not serial or not str(serial).strip():
-                        print(f"행 {row_num}: S/N(AA열) 누락 → 건너뜀")
-                        skip_count += 1
-                        continue
-                    if not work or not str(work).strip():
-                        print(f"행 {row_num}: 업무내용(T열) 누락 → 건너뜀")
-                        skip_count += 1
-                        continue
+        # master.db 연결
+        master_conn = sqlite3.connect(str(MASTER_DB_PATH))
+        master_cur = master_conn.cursor()
 
-                    # 고객사 REPORT 폴더
-                    report_dir = find_customer_report_folder(customer)
-                    if report_dir is None:
-                        print(f"행 {row_num}: 고객사 REPORT 폴더를 찾을 수 없음 (고객사: {customer})")
-                        skip_count += 1
-                        continue
+        for row in rows:
+            row_id = row["row_id"]
+            print(f"처리 시작: row_id={row_id}")
+            try:
+                customer = row["customer"]
+                model = row["model"]
+                serial = row["sn"]
+                work = row["work"]
+                staff = row["people"]
+                line = row["line"]
+                unit = row["unit"]
+                val_l = row["visit_1"]
+                val_m = row["visit_2"]
+                val_n = row["visit_3"]
 
-                    filename = make_report_filename(customer, yyyymmdd, model, unit, serial, work)
-                    report_path = report_dir / filename
-                    if not report_path.is_file():
-                        print(f"행 {row_num}: 레포트 파일을 찾을 수 없음 ({report_path})")
-                        skip_count += 1
-                        continue
-
-                    # 레포트 열기 (읽기 전용으로만 사용)
-                    report_wb = app.books.open(str(report_path))
-                    try:
-                        if REPORT_SHEET_NAME not in [s.name for s in report_wb.sheets]:
-                            print(f"행 {row_num}: 레포트에 '{REPORT_SHEET_NAME}' 시트 없음 → 건너뜀")
-                            skip_count += 1
-                            continue
-                        rs = report_wb.sheets[REPORT_SHEET_NAME]
-
-                        # 유상/무상 판단 (Z63)
-                        charge = rs.range("Z63").value
-                        charge_str = str(charge).strip() if charge is not None else ""
-                        if charge_str not in ("유상", "무상"):
-                            # 업체/빈칸 등은 건너뜀
-                            print(f"행 {row_num}: Z63='{charge_str}' (유상/무상 아님) → 건너뜀")
-                            skip_count += 1
-                            continue
-
-                        # KK 데이터 (작업/파트 공통)
-                        kk_customer = rs.range("E10").value   # 고객사
-                        kk_sn = rs.range("N11").value         # S/N
-                        kk_model = rs.range("N10").value      # MODEL
-                        kk_turn_on = rs.range("V10").value    # TURN ON
-                        kk_date = rs.range("V8").value        # 작업일자
-                        kk_prev = rs.range("V11").value       # 이전 방문일
-                        kk_start_time = rs.range("V9").value  # 시작시간
-                        kk_end_time = rs.range("Y9").value    # 종료시간
-                        kk_time = rs.range("AA9").value       # 작업시간
-                        kk_work_qty = rs.range("W63").value   # 작업 수량 (AE열)
-                        kk_charge = rs.range("Z63").value     # 유/무상 (AH열)
-                        kk_problem = rs.range("B17").value    # 문제/현상
-                        kk_cause = rs.range("B19").value      # 원인
-
-                        # 좌측/우측 Part 정보 수집
-                        left_parts = []
-                        for r in range(57, 64):
-                            part_no = rs.range((r, 9)).value  # I열
-                            if part_no is None or str(part_no).strip() == "":
-                                continue
-                            part_name = rs.range((r, 2)).value     # B열
-                            spec = rs.range((r, 6)).value          # F열
-                            used_days = rs.range((r, 12)).value    # L열
-                            qty = rs.range((r, 13)).value          # M열 수량
-                            charge_type = rs.range((r, 14)).value  # N열 유/무상
-                            left_parts.append((part_name, part_no, used_days, spec, qty, charge_type))
-
-                        right_parts = []
-                        for r in range(57, 62):
-                            part_no = rs.range((r, 22)).value  # V열
-                            if part_no is None or str(part_no).strip() == "":
-                                continue
-                            part_name = rs.range((r, 15)).value     # O열
-                            spec = rs.range((r, 19)).value          # S열
-                            used_days = rs.range((r, 25)).value     # Y열
-                            qty = rs.range((r, 26)).value           # Z열 수량
-                            charge_type = rs.range((r, 27)).value   # AA열 유/무상
-                            right_parts.append((part_name, part_no, used_days, spec, qty, charge_type))
-
-                        # "작업" 행 (유상/무상 공통)
-                        if charge_str in ("유상", "무상"):
-                            row = next_row
-                            master_sheet.range((row, 2)).value = "작업"  # B
-                            master_sheet.range((row, 3)).value = base_c  # C
-                            master_sheet.range((row, 4)).value = kk_customer  # D 고객사
-                            master_sheet.range((row, 5)).value = base_e  # E
-                            master_sheet.range((row, 6)).value = base_f  # F
-                            master_sheet.range((row, 7)).value = line         # G 라인
-                            master_sheet.range((row, 10)).value = unit        # J 설비호기
-                            master_sheet.range((row, 11)).value = base_k      # K
-                            master_sheet.range((row, 12)).value = kk_sn       # L S/N
-                            master_sheet.range((row, 13)).value = kk_model    # M MODEL
-                            master_sheet.range((row, 15)).value = kk_turn_on  # O TURN ON
-                            master_sheet.range((row, 16)).value = kk_date     # P 작업일자
-                            master_sheet.range((row, 17)).value = kk_start_time  # Q 시작시간
-                            master_sheet.range((row, 18)).value = kk_end_time    # R 종료시간
-                            master_sheet.range((row, 19)).value = kk_time     # S 작업시간 (기존값 무조건 덮어쓰기)
-                            master_sheet.range((row, 20)).value = staff       # T 작업인원
-                            master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
-                            master_sheet.range((row, 25)).value = kk_cause    # Y 원인
-                            master_sheet.range((row, 27)).value = "-"         # AA 구분
-                            master_sheet.range((row, 28)).value = "인건비"   # AB 인건비
-                            master_sheet.range((row, 29)).value = "-"         # AC
-                            master_sheet.range((row, 30)).value = "-"         # AD
-                            master_sheet.range((row, 31)).value = kk_work_qty  # AE 수량
-                            master_sheet.range((row, 32)).value = "-"          # AF WARRANTY
-                            master_sheet.range((row, 33)).value = "-"         # AG
-                            master_sheet.range((row, 34)).value = kk_charge    # AH 유/무상
-                            master_sheet.range((row, 35)).value = "-"         # AI
-                            master_sheet.range((row, 36)).value = "-"         # AJ
-                            master_sheet.range((row, 37)).value = "-"         # AK
-                            master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
-                            next_row += 1
-
-                        # "파트" 행들 (유상/무상 공통, 품번 수만큼)
-                        def write_part_row(part_name, part_no, used_days, spec_val, qty, charge_type):
-                            nonlocal next_row
-                            # 레포트에서 "교체이력 없음"으로 표시된 품번은 마스터에 기록하지 않음
-                            if isinstance(part_name, str) and part_name.strip() == "교체이력 없음":
-                                return
-                            if isinstance(spec_val, str) and spec_val.strip() == "교체이력 없음":
-                                return
-                            row = next_row
-                            # B~AO까지는 "작업"과 동일한 KK 데이터 기반
-                            master_sheet.range((row, 2)).value = "파트"       # B 구분
-                            master_sheet.range((row, 3)).value = base_c       # C
-                            master_sheet.range((row, 4)).value = kk_customer  # D 고객사
-                            master_sheet.range((row, 5)).value = base_e       # E
-                            master_sheet.range((row, 6)).value = base_f       # F
-                            master_sheet.range((row, 7)).value = line         # G 라인
-                            master_sheet.range((row, 10)).value = unit        # J 설비호기
-                            master_sheet.range((row, 11)).value = base_k      # K
-                            master_sheet.range((row, 12)).value = kk_sn       # L S/N
-                            master_sheet.range((row, 13)).value = kk_model    # M MODEL
-                            master_sheet.range((row, 15)).value = kk_turn_on  # O TURN ON
-                            master_sheet.range((row, 16)).value = kk_date     # P 작업일자
-                            master_sheet.range((row, 17)).value = kk_start_time  # Q 시작시간
-                            master_sheet.range((row, 18)).value = kk_end_time    # R 종료시간
-                            master_sheet.range((row, 19)).value = kk_time     # S 작업시간
-                            master_sheet.range((row, 20)).value = staff       # T 작업인원
-                            master_sheet.range((row, 24)).value = kk_problem  # X 문제(현상)
-                            master_sheet.range((row, 25)).value = kk_cause    # Y 원인
-                            master_sheet.range((row, 27)).value = "파트"      # AA 구분
-                            master_sheet.range((row, 28)).value = part_name   # AB 파트명
-                            master_sheet.range((row, 29)).value = part_no     # AC 품번
-                            master_sheet.range((row, 30)).value = "-"         # AD
-                            master_sheet.range((row, 31)).value = qty         # AE 수량
-                            master_sheet.range((row, 32)).value = "1년"       # AF WARRANTY
-                            master_sheet.range((row, 33)).value = used_days   # AG 사용일
-                            master_sheet.range((row, 34)).value = charge_type # AH 유/무상
-                            master_sheet.range((row, 35)).value = "-"         # AI
-                            master_sheet.range((row, 36)).value = "-"         # AJ
-                            master_sheet.range((row, 37)).value = spec_val    # AK 규격
-                            master_sheet.range((row, 39)).value = kk_prev     # AM 이전방문일
-                            next_row += 1
-
-                        for (pn, pno, ud, sp, qt, ct) in left_parts:
-                            write_part_row(pn, pno, ud, sp, qt, ct)
-                        for (pn, pno, ud, sp, qt, ct) in right_parts:
-                            write_part_row(pn, pno, ud, sp, qt, ct)
-
-                        success_count += 1
-                        print(f"행 {row_num}: 마스터 기입 완료 (작업/파트)")
-
-                    finally:
-                        report_wb.close()
-
-                except Exception as e:
+                visit_val, yyyymmdd = get_visit_date_and_yyyymmdd(val_l, val_m, val_n)
+                if visit_val is None or yyyymmdd is None:
+                    print(f"행 {row_id}: 방문일정 없음 → 건너뜀")
                     skip_count += 1
-                    print(f"행 {row_num}: 오류 - {e}")
+                    continue
 
-        master_wb.save()
-        master_wb.close()
-        schedule_wb.close()
+                if not customer or not str(customer).strip():
+                    print(f"행 {row_id}: 고객사명 누락 → 건너뜀")
+                    skip_count += 1
+                    continue
+                if not model or not str(model).strip():
+                    print(f"행 {row_id}: MODEL(Y열) 누락 → 건너뜀")
+                    skip_count += 1
+                    continue
+                if not serial or not str(serial).strip():
+                    print(f"행 {row_id}: S/N(AA열) 누락 → 건너뜀")
+                    skip_count += 1
+                    continue
+                if not work or not str(work).strip():
+                    print(f"행 {row_id}: 업무내용(T열) 누락 → 건너뜀")
+                    skip_count += 1
+                    continue
+
+                # 고객사 REPORT 폴더
+                report_dir = find_customer_report_folder(customer)
+                if report_dir is None:
+                    print(f"행 {row_id}: 고객사 REPORT 폴더를 찾을 수 없음 (고객사: {customer})")
+                    skip_count += 1
+                    continue
+
+                filename = make_report_filename(customer, yyyymmdd, model, unit, serial, work)
+                report_path = report_dir / filename
+                if not report_path.is_file():
+                    print(f"행 {row_id}: 레포트 파일을 찾을 수 없음 ({report_path})")
+                    skip_count += 1
+                    continue
+
+                # 레포트 열기 (읽기 전용으로만 사용)
+                report_wb = app.books.open(str(report_path))
+                try:
+                    if REPORT_SHEET_NAME not in [s.name for s in report_wb.sheets]:
+                        print(f"행 {row_id}: 레포트에 '{REPORT_SHEET_NAME}' 시트 없음 → 건너뜀")
+                        skip_count += 1
+                        continue
+                    rs = report_wb.sheets[REPORT_SHEET_NAME]
+
+                    # 유상/무상 판단 (Z63) - 값이 없거나 유효하지 않으면 기본값 '무상'으로 처리
+                    charge = rs.range("Z63").value
+                    charge_str = str(charge).strip() if charge is not None else ""
+                    if charge_str not in ("유상", "무상"):
+                        charge_str = "무상"
+
+                    # KK 데이터 (작업/파트 공통)
+                    kk_customer = rs.range("E10").value   # 고객사
+                    kk_sn = rs.range("N11").value         # S/N
+                    kk_model = rs.range("N10").value      # MODEL
+                    kk_turn_on = rs.range("V10").value    # TURN ON
+                    kk_date = rs.range("V8").value        # 작업일자
+                    kk_prev = rs.range("V11").value       # 이전 방문일
+                    kk_start_time = rs.range("V9").value  # 시작시간
+                    kk_end_time = rs.range("Y9").value    # 종료시간
+                    kk_time = rs.range("AA9").value       # 작업시간
+                    kk_work_qty = rs.range("W63").value   # 작업 수량 (AE열)
+                    kk_charge = charge_str                # 유/무상 (AH열)
+                    kk_problem = rs.range("B17").value    # 문제/현상
+                    kk_cause = rs.range("B19").value      # 원인
+
+                    # 좌측/우측 Part 정보 수집
+                    left_parts = []
+                    for r in range(57, 64):
+                        part_no = rs.range((r, 9)).value  # I열
+                        if part_no is None or str(part_no).strip() == "":
+                            continue
+                        part_name = rs.range((r, 2)).value     # B열
+                        spec = rs.range((r, 6)).value          # F열
+                        used_days = rs.range((r, 12)).value    # L열
+                        qty = rs.range((r, 13)).value          # M열 수량
+                        charge_type = rs.range((r, 14)).value  # N열 유/무상
+                        left_parts.append((part_name, part_no, used_days, spec, qty, charge_type))
+
+                    right_parts = []
+                    for r in range(57, 62):
+                        part_no = rs.range((r, 22)).value  # V열
+                        if part_no is None or str(part_no).strip() == "":
+                            continue
+                        part_name = rs.range((r, 15)).value     # O열
+                        spec = rs.range((r, 19)).value          # S열
+                        used_days = rs.range((r, 25)).value     # Y열
+                        qty = rs.range((r, 26)).value           # Z열 수량
+                        charge_type = rs.range((r, 27)).value   # AA열 유/무상
+                        right_parts.append((part_name, part_no, used_days, spec, qty, charge_type))
+
+                    # "작업" 행 (유상/무상 공통) → master_alarm INSERT
+                    if charge_str in ("유상", "무상"):
+                        work_values = (
+                            None,           # no
+                            "작업",         # category
+                            base_c,         # department
+                            kk_customer,    # customer
+                            base_e,         # division
+                            base_f,         # site
+                            line,           # line
+                            None,           # main_process
+                            None,           # sub_process
+                            unit,           # unit
+                            base_k,         # chamber
+                            kk_sn,          # sn
+                            kk_model,       # model
+                            None,           # type
+                            kk_turn_on,     # turn_on
+                            kk_date,        # work_date
+                            kk_start_time,  # work_time_q
+                            kk_end_time,    # end_time_r
+                            kk_time,        # work_time_s
+                            staff,          # staff_count
+                            None,           # man_hour
+                            None,           # major_class
+                            None,           # minor_class
+                            kk_problem,     # problem
+                            kk_cause,       # cause
+                            None,           # action
+                            "-",            # part_type
+                            "인건비",       # part_name
+                            "-",            # part_no
+                            "-",            # customer_code
+                            kk_work_qty,    # qty
+                            "-",            # warranty
+                            kk_charge,      # used_days  (임시 매핑)
+                            None,           # charge_type
+                            None,           # cost
+                            None,           # price
+                            None,           # spec
+                            None,           # warranty_out
+                            kk_prev,        # prev_visit
+                            None,           # month
+                            None,           # elapsed_days
+                            None,           # initial_defect
+                            None,           # charge_flag
+                        )
+                        master_cur.execute(
+                            """
+                            INSERT INTO master_alarm VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            tuple("" if v is None else v for v in work_values),
+                        )
+
+                    # "파트" 행들 (유상/무상 공통, 품번 수만큼)
+                    def write_part_row(part_name, part_no, used_days, spec_val, qty, charge_type):
+                        # 레포트에서 "교체이력 없음"으로 표시된 품번은 마스터에 기록하지 않음
+                        if isinstance(part_name, str) and part_name.strip() == "교체이력 없음":
+                            return
+                        if isinstance(spec_val, str) and spec_val.strip() == "교체이력 없음":
+                            return
+                        part_values = (
+                            None,           # no
+                            "파트",         # category
+                            base_c,         # department
+                            kk_customer,    # customer
+                            base_e,         # division
+                            base_f,         # site
+                            line,           # line
+                            None,           # main_process
+                            None,           # sub_process
+                            unit,           # unit
+                            base_k,         # chamber
+                            kk_sn,          # sn
+                            kk_model,       # model
+                            None,           # type
+                            kk_turn_on,     # turn_on
+                            kk_date,        # work_date
+                            kk_start_time,  # work_time_q
+                            kk_end_time,    # end_time_r
+                            kk_time,        # work_time_s
+                            staff,          # staff_count
+                            None,           # man_hour
+                            None,           # major_class
+                            None,           # minor_class
+                            kk_problem,     # problem
+                            kk_cause,       # cause
+                            None,           # action
+                            "파트",         # part_type
+                            part_name,      # part_name
+                            part_no,        # part_no
+                            "-",            # customer_code
+                            qty,            # qty
+                            "1년",          # warranty
+                            used_days,      # used_days
+                            None,           # charge_type
+                            None,           # cost
+                            None,           # price
+                            spec_val,       # spec
+                            None,           # warranty_out
+                            kk_prev,        # prev_visit
+                            None,           # month
+                            None,           # elapsed_days
+                            None,           # initial_defect
+                            None,           # charge_flag
+                        )
+                        master_cur.execute(
+                            """
+                                  INSERT INTO master_alarm VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            tuple("" if v is None else v for v in part_values),
+                        )
+
+                    for (pn, pno, ud, sp, qt, ct) in left_parts:
+                        write_part_row(pn, pno, ud, sp, qt, ct)
+                    for (pn, pno, ud, sp, qt, ct) in right_parts:
+                        write_part_row(pn, pno, ud, sp, qt, ct)
+
+                    success_count += 1
+                    print(f"행 {row_id}: 마스터 기입 완료 (작업/파트)")
+
+                finally:
+                    report_wb.close()
+
+            except Exception as e:
+                skip_count += 1
+                print(f"행 {row_id}: 오류 - {e}")
+
+        conn.close()
+        master_conn.commit()
+        master_conn.close()
 
         print("-" * 50)
         print(f"총 {success_count}건 마스터 기입, {skip_count}건 건너뜀")

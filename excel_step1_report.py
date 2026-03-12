@@ -8,6 +8,7 @@ Step 1: 스케줄 → 레포트 자동 생성 (xlwings)
 
 import sys
 import shutil
+import sqlite3
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
@@ -21,6 +22,9 @@ SCHEDULE_FOLDER = BASE_PATH / "스케쥴 시트"
 MASTER_FOLDER = BASE_PATH / "마스터 시트"
 TEMPLATE_FOLDER = BASE_PATH / "레포트 양식 기준"
 CUSTOMER_FOLDER = BASE_PATH / "고객사 폴더"
+DB_FOLDER = BASE_PATH / "db"
+MASTER_DB_PATH = DB_FOLDER / "master.db"
+SCHEDULE_DB_PATH = DB_FOLDER / "schedule.db"
 SHEET_NAME = "Sheet1"
 TEMPLATE_SHEET_NAME = "PM REPORT (새양식)"
 MASTER_SHEET_NAME = "설비 Master Sheet"
@@ -248,20 +252,15 @@ def _build_setup_dict(master_data, alarm_data):
     return result
 
 
-def _build_prev_inspection_dict(alarm_data):
+def _build_prev_inspection_dict_from_rows(rows):
     """
-    S/N → 오늘 이전 가장 최근 작업일자(P열) 딕셔너리 생성.
-    New Alarm 및 사용Part 이력: S/N=L열(col12), 작업일자=P열(col16), 데이터 3행부터.
+    S/N → 오늘 이전 가장 최근 작업일자 딕셔너리 생성.
+    rows: (sn, work_date) 리스트. work_date는 문자열/숫자/날짜 혼합 가능.
     """
     today = date.today()
     result = {}  # sn_str -> (best_date, best_raw_value)
 
-    for row_idx in range(ALARM_DATA_START_ROW - 1, len(alarm_data)):
-        row = alarm_data[row_idx]
-        if len(row) < max(COL_ALARM_SN, COL_ALARM_WORK_DATE):
-            continue
-        sn_val = row[COL_ALARM_SN - 1]  # L열
-        work_val = row[COL_ALARM_WORK_DATE - 1]  # P열
+    for sn_val, work_val in rows:
         if sn_val is None:
             continue
         sn_str = str(sn_val).strip()
@@ -269,7 +268,8 @@ def _build_prev_inspection_dict(alarm_data):
             continue
         if not has_date_value(work_val):
             continue
-        # 날짜 변환
+
+        # 날짜 변환 (이전 구현과 동일 로직)
         if isinstance(work_val, (datetime, date)):
             d = work_val.date() if isinstance(work_val, datetime) else work_val
         elif isinstance(work_val, (int, float)):
@@ -278,13 +278,53 @@ def _build_prev_inspection_dict(alarm_data):
             except (ValueError, OverflowError):
                 continue
         else:
-            continue
+            s = str(work_val).strip()[:10]
+            parsed = None
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y", "%Y.%m.%d"):
+                try:
+                    parsed = datetime.strptime(s, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                continue
+            d = parsed
+
         if d >= today:
             continue
         if sn_str not in result or d > result[sn_str][0]:
             result[sn_str] = (d, work_val)
 
     return {k: v[1] for k, v in result.items()}  # sn -> raw value for Excel
+
+
+def load_master_dicts_from_db():
+    """master.db에서 setup_dict, prev_inspection_dict 생성."""
+    if not MASTER_DB_PATH.is_file():
+        print(f"오류: master.db를 찾을 수 없습니다. ({MASTER_DB_PATH})")
+        return {}, {}
+
+    conn = sqlite3.connect(str(MASTER_DB_PATH))
+    try:
+        cur = conn.cursor()
+
+        # SET UP: S/N → TURN ON(O열)
+        setup_dict = {}
+        cur.execute("SELECT sn, turn_on FROM master_alarm WHERE sn IS NOT NULL AND turn_on IS NOT NULL")
+        for sn_val, setup_val in cur.fetchall():
+            sn_str = str(sn_val).strip()
+            if not sn_str:
+                continue
+            setup_dict[sn_str] = setup_val
+
+        # 이전 점검일: S/N → 오늘 이전 가장 최근 작업일자(work_date)
+        cur.execute("SELECT sn, work_date FROM master_alarm WHERE sn IS NOT NULL AND work_date IS NOT NULL")
+        rows = cur.fetchall()
+        prev_inspection_dict = _build_prev_inspection_dict_from_rows(rows)
+
+        return setup_dict, prev_inspection_dict
+    finally:
+        conn.close()
 
 
 def make_report_filename(customer, yyyymmdd, model, unit, serial, work):
@@ -297,26 +337,30 @@ def make_report_filename(customer, yyyymmdd, model, unit, serial, work):
     return f"{c}_{yyyymmdd}_{e}_{u}_({s})_{w} 件.xlsx"
 
 
-def process_one_row(app, schedule_sheet, row_num, setup_dict, prev_inspection_dict, template_path):
+def process_one_row(app, row, setup_dict, prev_inspection_dict, template_path):
     """
-    한 행 처리: 검증 → 방문일/고객사/폴더 → 딕셔너리에서 SET UP·이전 점검일 조회 → 템플릿 복사 → 셀 채우기 → 저장 → AC열 완료 표시.
+    한 행 처리: 검증 → 방문일/고객사/폴더 → 딕셔너리에서 SET UP·이전 점검일 조회 → 템플릿 복사 → 셀 채우기 → 저장.
     성공 시 True, 실패 시 오류 메시지 반환(문자열).
+    row: schedule.db에서 읽은 dict(row).
     """
-    # 값 읽기 (AB=방문완료, AC=처리완료)
-    val_ab = schedule_sheet.range((row_num, COL_VISIT_DONE)).value
-    val_ac = schedule_sheet.range((row_num, COL_PROCESS_DONE)).value
-    val_l = schedule_sheet.range((row_num, COL_1ST_VISIT)).value
-    val_m = schedule_sheet.range((row_num, COL_2ND_VISIT)).value
-    val_n = schedule_sheet.range((row_num, COL_3RD_VISIT)).value
-    customer = schedule_sheet.range((row_num, COL_CUSTOMER)).value
-    responsible = schedule_sheet.range((row_num, COL_RESPONSIBLE)).value
-    mat_worker = schedule_sheet.range((row_num, COL_MAT)).value
-    model = schedule_sheet.range((row_num, COL_MODEL)).value
-    serial = schedule_sheet.range((row_num, COL_SERIAL)).value
-    process = schedule_sheet.range((row_num, COL_PROCESS)).value
-    unit = schedule_sheet.range((row_num, COL_UNIT)).value
-    work = schedule_sheet.range((row_num, COL_WORK)).value
+    row_id = row.get("row_id")
 
+    # DB에서 읽은 값 매핑
+    val_ab = row.get("visit_done")
+    val_ac = row.get("process_done")
+    val_l = row.get("visit_1")
+    val_m = row.get("visit_2")
+    val_n = row.get("visit_3")
+    customer = row.get("customer")
+    responsible = row.get("manager")
+    mat_worker = row.get("mat_worker")
+    model = row.get("model")
+    serial = row.get("sn")
+    process = row.get("process")
+    unit = row.get("unit")
+    work = row.get("work")
+
+    # 방문완료/기존완료 여부는 schedule.db 생성 시 필터링되지만, 방어적으로 한 번 더 체크
     if not is_visit_done_o(val_ab):
         return None  # 처리 대상 아님
     if val_ac is not None and str(val_ac).strip():
@@ -325,30 +369,30 @@ def process_one_row(app, schedule_sheet, row_num, setup_dict, prev_inspection_di
     # 방문일정 없음
     visit_val, yyyymmdd = get_visit_date_and_yyyymmdd(val_l, val_m, val_n)
     if visit_val is None or yyyymmdd is None:
-        return f"행 {row_num}: 방문일정 없음 오류"
+        return f"행 {row_id}: 방문일정 없음 오류"
 
     # 고객사명 누락
     if not customer or not str(customer).strip():
-        return f"행 {row_num}: 고객사명 누락"
+        return f"행 {row_id}: 고객사명 누락"
 
     # 필수값 누락 (MODEL=Y, S/N=AA, 업무내용=T)
     if not model or not str(model).strip():
-        return f"행 {row_num}: MODEL(Y열) 누락"
+        return f"행 {row_id}: MODEL(Y열) 누락"
     if not serial or not str(serial).strip():
-        return f"행 {row_num}: S/N(AA열) 누락"
+        return f"행 {row_id}: S/N(AA열) 누락"
     if not work or not str(work).strip():
-        return f"행 {row_num}: 업무내용(T열) 누락"
+        return f"행 {row_id}: 업무내용(T열) 누락"
 
     # 고객사 폴더 > REPORT 찾기
     report_dir = find_customer_report_folder(customer)
     if report_dir is None:
-        return f"행 {row_num}: 고객사 폴더 또는 REPORT 폴더를 찾을 수 없음 (고객사: {customer})"
+        return f"행 {row_id}: 고객사 폴더 또는 REPORT 폴더를 찾을 수 없음 (고객사: {customer})"
 
     # 딕셔너리에서 SET UP(V10) 조회
     sn_str = str(serial).strip()
     setup_val = setup_dict.get(sn_str)
     if setup_val is None:
-        return f"행 {row_num}: MASTER SHEET에 S/N이 존재하지 않습니다 ({serial})"
+        return f"행 {row_id}: MASTER SHEET에 S/N이 존재하지 않습니다 ({serial})"
 
     # 딕셔너리에서 이전 점검일(V11) 조회 (없어도 진행, 빈칸 허용)
     previous_inspection_val = prev_inspection_dict.get(sn_str)
@@ -357,11 +401,15 @@ def process_one_row(app, schedule_sheet, row_num, setup_dict, prev_inspection_di
     filename = make_report_filename(customer, yyyymmdd, model, unit, serial, work)
     save_path = report_dir / filename
 
+    # 레포트 파일명 중복 체크
+    if save_path.exists():
+        return f"행 {row_id}: 같은 파일명의 레포트가 존재합니다"
+
     # 템플릿 파일 복사 후 열어서 셀 채우기
     try:
         shutil.copy2(template_path, save_path)
     except Exception as e:
-        return f"행 {row_num}: 템플릿 복사 실패 - {e}"
+        return f"행 {row_id}: 템플릿 복사 실패 - {e}"
 
     report_wb = app.books.open(str(save_path))
     try:
@@ -388,25 +436,21 @@ def process_one_row(app, schedule_sheet, row_num, setup_dict, prev_inspection_di
     finally:
         report_wb.close()
 
-    # 스케줄 AC열에 완료 표시
-    schedule_sheet.range((row_num, COL_PROCESS_DONE)).value = "완료"
     return True
 
 
 def main():
-    if not SCHEDULE_FOLDER.is_dir():
-        print(f"오류: 스케줄 폴더를 찾을 수 없습니다. {SCHEDULE_FOLDER}")
-        return
     if not TEMPLATE_FOLDER.is_dir():
         print(f"오류: 템플릿 폴더를 찾을 수 없습니다. {TEMPLATE_FOLDER}")
         return
-    if not MASTER_FOLDER.is_dir():
-        print(f"오류: 마스터 폴더를 찾을 수 없습니다. {MASTER_FOLDER}")
+    if not DB_FOLDER.is_dir():
+        print(f"오류: DB 폴더를 찾을 수 없습니다. {DB_FOLDER}")
         return
-
-    schedule_files = [p for p in list(SCHEDULE_FOLDER.glob("*.xlsx")) + list(SCHEDULE_FOLDER.glob("*.xlsm")) if "_backup_" not in p.name and not p.name.startswith("~$")]
-    if not schedule_files:
-        print(f"처리할 스케줄 파일이 없습니다. ({SCHEDULE_FOLDER})")
+    if not MASTER_DB_PATH.is_file():
+        print(f"오류: master.db를 찾을 수 없습니다. ({MASTER_DB_PATH})")
+        return
+    if not SCHEDULE_DB_PATH.is_file():
+        print(f"오류: schedule.db를 찾을 수 없습니다. ({SCHEDULE_DB_PATH})")
         return
 
     template_files = list(TEMPLATE_FOLDER.glob("*.xlsx")) + list(TEMPLATE_FOLDER.glob("*.xlsm"))
@@ -414,106 +458,143 @@ def main():
     if not template_files:
         print(f"템플릿 파일이 없습니다. ({TEMPLATE_FOLDER})")
         return
+    template_path = template_files[0]
 
-    master_files = list(MASTER_FOLDER.glob("*.xlsx")) + list(MASTER_FOLDER.glob("*.xlsm"))
-    master_files = [p for p in master_files if "_backup_" not in p.name and not p.name.startswith("~$")]
-    if not master_files:
-        print(f"마스터 파일이 없습니다. ({MASTER_FOLDER})")
+    # master.db에서 SET UP / 이전 점검일 딕셔너리 생성
+    setup_dict, prev_inspection_dict = load_master_dicts_from_db()
+    print(f"마스터 로딩 완료: SET UP {len(setup_dict)}건, 이전 점검일 {len(prev_inspection_dict)}건")
+
+    # schedule.db에서 status="미완료" 행 조회
+    conn = sqlite3.connect(str(SCHEDULE_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            rowid AS row_id,
+            receipt_date,
+            visit_plan,
+            visit_1,
+            visit_2,
+            visit_3,
+            reason,
+            customer,
+            manager,
+            receiver,
+            mat_worker,
+            work,
+            charge_type,
+            people,
+            process,
+            line,
+            model,
+            unit,
+            sn,
+            visit_done,
+            process_done,
+            status
+        FROM schedule
+        WHERE status = '미완료'
+        """
+    )
+    rows = cur.fetchall()
+
+    if not rows:
+        print("status='미완료' 인 스케줄 행이 없습니다.")
+        conn.close()
         return
 
-    schedule_path = schedule_files[0]
-    template_path = template_files[0]
-    master_path = master_files[0]
-
-    # 실행 전: 파일이 열려 있으면 종료
-    for path in (schedule_path, template_path):
-        if is_excel_file_open(path):
-            print("엑셀 파일을 닫고 다시 실행하세요.")
-            sys.exit(1)
-
-    # 실행 전: 스케줄 원본 자동 백업
-    try:
-        backup_path = backup_file(schedule_path)
-        print(f"백업 완료: {backup_path.name}")
-    except Exception as e:
-        print(f"백업 실패: {e}")
-        sys.exit(1)
-
     app = None
+    success_count = 0
+    skip_count = 0
+
     try:
         app = xw.App(visible=False)
         app.display_alerts = False
 
-        # 스케줄 열기
-        schedule_wb = app.books.open(str(schedule_path))
-        if SHEET_NAME not in [s.name for s in schedule_wb.sheets]:
-            print(f"오류: 스케줄 시트에 '{SHEET_NAME}'이(가) 없습니다.")
-            return
-        schedule_sheet = schedule_wb.sheets[SHEET_NAME]
-
-        # 시트 보호 해제 (AC열 기록 위해)
-        try:
-            schedule_sheet.api.Unprotect(PROTECT_PASSWORD)
-        except Exception:
+        for row in rows:
+            row_id = row["row_id"]
             try:
-                schedule_sheet.api.Unprotect()
-            except Exception:
-                pass
-
-        # 마스터 열기
-        master_wb = app.books.open(str(master_path))
-
-        master_design_sheet = _get_sheet_by_name(master_wb, MASTER_SHEET_NAME)
-        master_alarm_sheet = _get_sheet_by_name(master_wb, MASTER_SHEET_ALARM)
-
-        # ★ 마스터 전체 데이터를 한 번에 읽기 (속도 개선 핵심)
-        master_data = _read_all_data(master_design_sheet) if master_design_sheet is not None else []
-        alarm_data = _read_all_data(master_alarm_sheet) if master_alarm_sheet is not None else []
-
-        # ★ 딕셔너리 미리 생성 (매 건마다 시트 읽기 제거)
-        setup_dict = _build_setup_dict(master_data, alarm_data)
-        prev_inspection_dict = _build_prev_inspection_dict(alarm_data)
-
-        print(f"마스터 로딩 완료: SET UP {len(setup_dict)}건, 이전 점검일 {len(prev_inspection_dict)}건")
-
-        success_count = 0
-        skip_count = 0
-        for header_row in [r for r in HEADER_ROWS if r >= 183]:
-            start_row = header_row + 1
-            end_row = header_row + DATA_ROWS_PER_BLOCK
-            for row_num in range(start_row, end_row + 1):
-                try:
-                    result = process_one_row(app, schedule_sheet, row_num, setup_dict, prev_inspection_dict, template_path)
-                    if result is None:
+                # 처리 시작 시 status="처리중"으로 변경 (동시 중복 차단)
+                with conn:
+                    cur.execute(
+                        "UPDATE schedule SET status = '처리중' WHERE rowid = ? AND status = '미완료'",
+                        (row_id,),
+                    )
+                    if cur.rowcount == 0:
+                        # 다른 프로세스가 먼저 집어간 행
                         continue
-                    if result is True:
-                        success_count += 1
-                        print(f"행 {row_num}: 레포트 생성 완료")
-                    else:
-                        skip_count += 1
-                        print(result)
-                except Exception as e:
+
+                row_dict = dict(row)
+
+                result = process_one_row(app, row_dict, setup_dict, prev_inspection_dict, template_path)
+                if result is None:
+                    # 처리 대상 아님
+                    continue
+                if result is True:
+                    with conn:
+                        cur.execute(
+                            "UPDATE schedule SET status = '완료' WHERE rowid = ?",
+                            (row_id,),
+                        )
+                    success_count += 1
+                    print(f"행 {row_id}: 레포트 생성 완료")
+                else:
+                    # 오류 문자열 (검증 실패 등)
+                    with conn:
+                        cur.execute(
+                            "UPDATE schedule SET status = '미완료' WHERE rowid = ?",
+                            (row_id,),
+                        )
                     skip_count += 1
-                    print(f"행 {row_num}: 오류 - {e}")
+                    print(result)
 
-        schedule_wb.save()
+            except Exception:
+                # 에러 발생 시: 레포트 파일 삭제 → status를 "미완료"로 되돌리기
+                customer = row.get("customer")
+                sn = row.get("sn")
+                print(
+                    f"[에러] 행 {row_id} (고객사: {customer}, S/N: {sn}) 레포트 생성 중지. "
+                    f"스케줄 시트 작성 내용은 유지됨. 문제 확인 후 Step 1 재실행 필요."
+                )
 
-        # AC열 시트 보호 재적용
-        max_row = HEADER_ROWS[-1] + DATA_ROWS_PER_BLOCK + 50
-        try:
-            schedule_sheet.range((1, COL_PROCESS_DONE), (max_row, COL_PROCESS_DONE)).api.Locked = True
-            schedule_sheet.api.Protect(Password=PROTECT_PASSWORD)
-        except Exception:
-            pass
+                # 레포트 파일 삭제 시도
+                try:
+                    visit_val, yyyymmdd = get_visit_date_and_yyyymmdd(
+                        row.get("visit_1"), row.get("visit_2"), row.get("visit_3")
+                    )
+                    if visit_val is not None and yyyymmdd is not None:
+                        report_dir = find_customer_report_folder(customer)
+                        if report_dir is not None:
+                            filename = make_report_filename(
+                                customer,
+                                yyyymmdd,
+                                row.get("model"),
+                                row.get("unit"),
+                                sn,
+                                row.get("work"),
+                            )
+                            save_path = report_dir / filename
+                            try:
+                                save_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
-        master_wb.close()
-        schedule_wb.close()
+                with conn:
+                    cur.execute(
+                        "UPDATE schedule SET status = '미완료' WHERE rowid = ?",
+                        (row_id,),
+                    )
+                skip_count += 1
 
         print("-" * 50)
         print(f"총 {success_count}건 레포트 생성, {skip_count}건 건너뜀")
     finally:
         if app is not None:
             app.quit()
+        conn.close()
 
 
 if __name__ == "__main__":
